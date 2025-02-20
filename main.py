@@ -15,6 +15,52 @@ import queue
 import time
 import tempfile
 
+# Define the device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def train_visual_model(train_loader, val_loader, epochs=10):
+    model = models.mobilenet_v3_small(
+        weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
+    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, 2)
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    for epoch in range(epochs):
+        # Training loop
+        model.train()
+        train_loss = 0
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+
+        # Validation loop
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        print(f'Epoch {epoch+1}, Train Loss: {train_loss/len(train_loader):.4f}, '
+              f'Val Loss: {val_loss/len(val_loader):.4f}, Accuracy: {100*correct/total:.2f}%')
+
+    return model
+
 # ====================== 1. MODEL DETEKSI MULTI-MODAL ======================
 
 
@@ -51,21 +97,28 @@ class DeepGuardModel:
 
     def analyze_image(self, image):
         self.visual_model.eval()
-        try:
-            confidence = np.random.uniform(0.7, 0.95)
-            height, width = image.shape[:2]
-            heatmap = np.zeros((height, width))
-            for _ in range(3):
-                x, y = np.random.randint(
-                    0, width), np.random.randint(0, height)
-                size = np.random.randint(10, 50)
-                cv2.circle(heatmap, (x, y), size, 1, -1)
-            heatmap = cv2.GaussianBlur(heatmap, (15, 15), 0)
-            heatmap = heatmap / np.max(heatmap)
-            return confidence, heatmap
-        except Exception as e:
-            print(f"Error in analyze_image: {e}")
-            return None, None
+        with torch.no_grad():
+            # Convert image to tensor and normalize
+            image_tensor = torch.tensor(image, dtype=torch.float32).permute(
+                2, 0, 1).unsqueeze(0) / 255.0
+            # Ensure the tensor is on the correct device
+            image_tensor = image_tensor.to(device)
+
+            # Get model prediction
+            output = self.visual_model(image_tensor)
+            confidence = torch.nn.functional.softmax(
+                output, dim=1)[0, 1].item()  # Assuming class 1 is "fake"
+
+            # Generate heatmap (example using Grad-CAM or similar technique)
+            heatmap = self.generate_heatmap(image_tensor, output)
+
+        return confidence, heatmap
+
+    def generate_heatmap(self, image_tensor, output):
+        # This is a placeholder for actual heatmap generation logic
+        # You need to implement this based on your model and requirements
+        heatmap = np.random.rand(image_tensor.shape[2], image_tensor.shape[3])
+        return heatmap
 
     def analyze_video(self, video_frames, audio_data=None):
         results = []
